@@ -30,7 +30,7 @@ func init() {
 	// "yelnil@example.com" with password "qwe"
 	var dbError error
 	dbSession, dbError = rethink.Connect(rethink.ConnectOpts{
-		Address:  "localhost:4444",
+		Address:  "localhost:28015",
 		Database: "todo"})
 	if dbError != nil {
 		log.Fatalln(dbError.Error())
@@ -40,7 +40,10 @@ func init() {
 	me := MyUserModel{Email: "yelnil@example.com"}
 	hpass, _ := bcrypt.GenerateFromPassword([]byte("qwe"), bcrypt.DefaultCost)
 	me.Password = string(hpass)
-	row, _ := rethink.Table("user").Filter(rethink.Row.Field("email").Eq(me.Email)).RunRow(dbSession)
+	row, err := rethink.Table("user").Filter(rethink.Row.Field("email").Eq(me.Email)).RunRow(dbSession)
+	if err != nil {
+		fmt.Println(err)
+	}
 	// I don't exist, insert me.
 	if row.IsNil() {
 		rethink.Table("user").Insert(me).RunWrite(dbSession)
@@ -75,7 +78,7 @@ func main() {
 		var userInDb MyUserModel
 		query := rethink.Table("user").Filter(rethink.Row.Field("email").Eq(userLoggingIn.Email))
 		row, err := query.RunRow(dbSession)
-
+		fmt.Println("logging in:", userLoggingIn.Email)
 		// TODO do flash errors
 		if err == nil && !row.IsNil() {
 			if err := row.Scan(&userInDb); err != nil {
@@ -84,15 +87,19 @@ func main() {
 				return
 			}
 		} else {
-			fmt.Println("No email")
+			if row.IsNil() {
+				fmt.Println("User doesn't exist")
+			} else {
+				fmt.Println(err)
+			}
 			r.Redirect(sessionauth.RedirectUrl)
 			return
 		}
+
 		passworderr := bcrypt.CompareHashAndPassword([]byte(userInDb.Password), []byte(userLoggingIn.Password))
 		if passworderr != nil {
 			fmt.Println("Wrong Password")
 			r.Redirect(sessionauth.RedirectUrl)
-			return
 		} else {
 			err := sessionauth.AuthenticateSession(session, &userInDb)
 			if err != nil {
@@ -102,7 +109,6 @@ func main() {
 			params := req.URL.Query()
 			redirect := params.Get(sessionauth.RedirectParam)
 			r.Redirect(redirect)
-			return
 		}
 	})
 

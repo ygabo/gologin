@@ -1,48 +1,54 @@
 // This from the martini-contrib sessionauth example,
-// but this is using MySQL instead of sqlite3. For personal learning purposes only.
+// but this is using RethinkDB instead of sqlite3. For personal learning purposes only.
 
 // Auth example is an example application which requires a login
-// to view a private link. The username is "testuser" and the password
-// is "password".
+// to view a private link. The username is "yelnil@example.coms" and the password
+// is "qwe".
 package main
 
 import (
-	"database/sql"
-	"github.com/coopernurse/gorp"
+	"code.google.com/p/go.crypto/bcrypt"
+	"fmt"
+	rethink "github.com/dancannon/gorethink"
 	"github.com/go-martini/martini"
 	"github.com/martini-contrib/binding"
 	"github.com/martini-contrib/render"
 	"github.com/martini-contrib/sessionauth"
 	"github.com/martini-contrib/sessions"
-	_ "github.com/go-sql-driver/mysql"
 	"log"
 	"net/http"
-	"os"
-	"fmt"
-
 )
 
-var dbmap *gorp.DbMap
+var (
+	dbSession *rethink.Session
+)
 
-func initDb() *gorp.DbMap {
+func init() {
 
-	// Assumes there's a mysql server running locally with db called 'test'
-	// has one row in it with 'testuser' and 'password' as pw
-	// columns are: id, username, password
-
-	db, err := sql.Open("mysql", "user:password@/test")
-	if err != nil {
-		log.Fatalln("Fail to create database", err)
+	// Assumes there's a rethinkdb instance running locally with db called 'todo'
+	// Db has table called "user" with.
+	// "yelnil@example.com" with password "qwe"
+	var dbError error
+	dbSession, dbError = rethink.Connect(rethink.ConnectOpts{
+		Address:  "localhost:4444",
+		Database: "todo"})
+	if dbError != nil {
+		log.Fatalln(dbError.Error())
 	}
 
-	dbmap := &gorp.DbMap{Db: db, Dialect: gorp.MySQLDialect{"test", "UTF8"}}
-	return dbmap
+	// Testing purposes: query myself.
+	me := MyUserModel{Email: "yelnil@example.com"}
+	hpass, _ := bcrypt.GenerateFromPassword([]byte("qwe"), bcrypt.DefaultCost)
+	me.Password = string(hpass)
+	row, _ := rethink.Table("user").Filter(rethink.Row.Field("email").Eq(me.Email)).RunRow(dbSession)
+	// I don't exist, insert me.
+	if row.IsNil() {
+		rethink.Table("user").Insert(me).RunWrite(dbSession)
+	}
 }
 
 func main() {
 	store := sessions.NewCookieStore([]byte("secret123"))
-	dbmap = initDb()
-
 	m := martini.Classic()
 	m.Use(render.Renderer())
 
@@ -64,23 +70,35 @@ func main() {
 		r.HTML(200, "login", nil)
 	})
 
-	m.Post("/new-login", binding.Bind(MyUserModel{}), func(session sessions.Session, postedUser MyUserModel, r render.Render, req *http.Request) {
-		
-		// This isn't really proper auth.
-		// When users register, do some sort of password encryption/hash and save the output in the DB. 
-		// Afterwards, when they login, encrypt/hash their input password and compare it with the one in the DB.
-		user := MyUserModel{}
-		err := dbmap.SelectOne(&user, "SELECT * FROM users WHERE username=? and password=?", postedUser.Username, postedUser.Password)
-		if err != nil {
-			fmt.Println(err)
+	m.Post("/new-login", binding.Bind(MyUserModel{}), func(session sessions.Session, userLoggingIn MyUserModel, r render.Render, req *http.Request) {
+
+		var userInDb MyUserModel
+		query := rethink.Table("user").Filter(rethink.Row.Field("email").Eq(userLoggingIn.Email))
+		row, err := query.RunRow(dbSession)
+
+		// TODO do flash errors
+		if err == nil && !row.IsNil() {
+			if err := row.Scan(&userInDb); err != nil {
+				fmt.Println("Error scanning user in DB")
+				r.Redirect(sessionauth.RedirectUrl)
+				return
+			}
+		} else {
+			fmt.Println("No email")
+			r.Redirect(sessionauth.RedirectUrl)
+			return
+		}
+		passworderr := bcrypt.CompareHashAndPassword([]byte(userInDb.Password), []byte(userLoggingIn.Password))
+		if passworderr != nil {
+			fmt.Println("Wrong Password")
 			r.Redirect(sessionauth.RedirectUrl)
 			return
 		} else {
-			err := sessionauth.AuthenticateSession(session, &user)
+			err := sessionauth.AuthenticateSession(session, &userInDb)
 			if err != nil {
+				fmt.Println("Wrong Auth")
 				r.JSON(500, err)
 			}
-
 			params := req.URL.Query()
 			redirect := params.Get(sessionauth.RedirectParam)
 			r.Redirect(redirect)

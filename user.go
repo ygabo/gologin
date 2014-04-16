@@ -1,19 +1,21 @@
 // This is from the martini-contrib example
 // but this is using mysql instead of sqlite3
 // For learning purposes only.
-
 package main
 
 import (
+	rethink "github.com/dancannon/gorethink"
 	"github.com/martini-contrib/sessionauth"
+	"time"
 )
 
-// MyUserModel can be any struct that represents a user in my system
 type MyUserModel struct {
-	Id            int64  `form:"id" db:"id"`
-	Username      string `form:"name" db:"username"`
-	Password      string `form:"password" db:"password"`
-	authenticated bool   `form:"-" db:"-"`
+	Id            string `form:"id" gorethink:"id,omitempty"`
+	Email         string `form:"email" gorethink:"email"`
+	Password      string `form:"password" gorethink:"password"`
+	Username      string `form:"name" gorethink:"username,omitempty"`
+	Created       time.Time
+	authenticated bool `form:"-" gorethink:"-"`
 }
 
 // GetAnonymousUser should generate an anonymous user model
@@ -50,10 +52,15 @@ func (u *MyUserModel) UniqueId() interface{} {
 // GetById will populate a user object from a database model with
 // a matching id.
 func (u *MyUserModel) GetById(id interface{}) error {
-	err := dbmap.SelectOne(u, "SELECT * FROM users WHERE id = ?", id)
+
+	row, err := rethink.Table("user").Get(id).RunRow(dbSession)
 	if err != nil {
 		return err
 	}
-
+	if !row.IsNil() {
+		if err := row.Scan(&u); err != nil {
+			return err
+		}
+	}
 	return nil
 }

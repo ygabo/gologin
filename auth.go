@@ -55,21 +55,20 @@ func main() {
 	m := martini.Classic()
 	m.Use(render.Renderer())
 
-	// Default our store to use Session cookies, so we don't leave logged in
-	// users roaming around
-	store.Options(sessions.Options{
-		MaxAge: 0,
-	})
+	store.Options(sessions.Options{MaxAge: 0})
 	m.Use(sessions.Sessions("my_session", store))
+
+	// Every request is bound with empty user. If there's a session,
+	// that empty user is filled with appopriate data
 	m.Use(sessionauth.SessionUser(GenerateAnonymousUser))
-	sessionauth.RedirectUrl = "/new-login"
-	sessionauth.RedirectParam = "new-next"
+	sessionauth.RedirectUrl = "/login"
+	sessionauth.RedirectParam = "next"
 
 	m.Get("/", func(r render.Render) {
 		r.HTML(200, "index", nil)
 	})
 
-	m.Get("/new-login", func(r render.Render) {
+	m.Get("/login", func(r render.Render) {
 		r.HTML(200, "login", nil)
 	})
 
@@ -128,11 +127,12 @@ func main() {
 		r.Redirect(sessionauth.RedirectUrl)
 	})
 
-	m.Post("/new-login", binding.Bind(MyUserModel{}), func(session sessions.Session, userLoggingIn MyUserModel, r render.Render, req *http.Request) {
+	m.Post("/login", binding.Bind(MyUserModel{}), func(session sessions.Session, userLoggingIn MyUserModel, r render.Render, req *http.Request) {
 		var userInDb MyUserModel
 		query := rethink.Table("user").Filter(rethink.Row.Field("email").Eq(userLoggingIn.Email))
 		row, err := query.RunRow(dbSession)
 		fmt.Println("logging in:", userLoggingIn.Email)
+
 		// TODO do flash errors
 		if err == nil && !row.IsNil() {
 			if err := row.Scan(&userInDb); err != nil {
